@@ -88,6 +88,12 @@ import {
   listAllContexts,
   setConfigIndexName,
 } from "./collections.js";
+import {
+  processQuery,
+  buildEnhancedFTSQuery,
+  getClassificationDescription,
+  type ProcessedQuery,
+} from "./query-classifier.js";
 
 // Enable production mode - allows using default database path
 // Tests must set INDEX_PATH or use createStore() with explicit path
@@ -1751,6 +1757,7 @@ type OutputOptions = {
   collection?: string | string[];  // Filter by collection name(s)
   lineNumbers?: boolean; // Add line numbers to output
   context?: string;      // Optional context for query expansion
+  smartClassify?: boolean; // Enable query classification and synonym expansion
 };
 
 // Highlight query terms in text (skip short words < 3 chars)
@@ -2121,6 +2128,16 @@ async function querySearch(query: string, opts: OutputOptions, _embedModel: stri
   // Check for structured query syntax (lex:/vec:/hyde: prefixes)
   const structuredQueries = parseStructuredQuery(query);
 
+  // Process query with classifier if smart classify is enabled
+  let processedQuery: ProcessedQuery | null = null;
+  if (opts.smartClassify) {
+    processedQuery = processQuery(query);
+    process.stderr.write(`${c.dim}Query classified as ${getClassificationDescription(processedQuery.queryType)}${c.reset}\n`);
+    if (processedQuery.expandedTerms.length > 0) {
+      process.stderr.write(`${c.dim}Expanded terms: ${processedQuery.expandedTerms.slice(0, 8).join(', ')}${processedQuery.expandedTerms.length > 8 ? '...' : ''}${c.reset}\n`);
+    }
+  }
+
   await withLLMSession(async () => {
     let results;
 
@@ -2160,7 +2177,10 @@ async function querySearch(query: string, opts: OutputOptions, _embedModel: stri
       });
     } else {
       // Standard hybrid query with automatic expansion
-      results = await hybridQuery(store, query, {
+      // Use enhanced query if smart classify is enabled
+      const searchQuery = processedQuery ? buildEnhancedFTSQuery(processedQuery) : query;
+      
+      results = await hybridQuery(store, searchQuery, {
         collection: singleCollection,
         limit: opts.all ? 500 : (opts.limit || 10),
         minScore: opts.minScore || 0,
@@ -2271,6 +2291,7 @@ function parseCLI() {
       from: { type: "string" },  // start line
       "max-bytes": { type: "string" },  // max bytes for multi-get
       "line-numbers": { type: "boolean" },  // add line numbers to output
+      "smart-classify": { type: "boolean" },  // enable query classification and synonym expansion
       // MCP HTTP transport options
       http: { type: "boolean" },
       daemon: { type: "boolean" },
@@ -2308,6 +2329,7 @@ function parseCLI() {
     all: isAll,
     collection: values.collection as string[] | undefined,
     lineNumbers: !!values["line-numbers"],
+    smartClassify: !!values["smart-classify"],
   };
 
   return {
