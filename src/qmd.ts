@@ -2292,6 +2292,9 @@ function parseCLI() {
       "max-bytes": { type: "string" },  // max bytes for multi-get
       "line-numbers": { type: "boolean" },  // add line numbers to output
       "smart-classify": { type: "boolean" },  // enable query classification and synonym expansion
+      semantic: { type: "boolean" },  // enable semantic search for code
+      ollama: { type: "string" },  // Ollama URL for embeddings (default: http://localhost:11434)
+      project: { type: "string" },  // project name for code-index
       // MCP HTTP transport options
       http: { type: "boolean" },
       daemon: { type: "boolean" },
@@ -2904,6 +2907,45 @@ if (isMain) {
       vacuumDatabase(db);
       console.log(`${c.green}✓${c.reset} Database vacuumed`);
 
+      closeDb();
+      break;
+    }
+
+    case "code-index": {
+      const subcommand = cli.args[0] || 'status';
+      const projectName = cli.values.project as string || cli.args[1];
+      const projectPath = cli.args[1];
+      
+      const { addProject, getStatus, searchCode, triggerEmbedding, removeProject } = await import("./code/commands.js");
+      const db = getDb();
+      
+      switch (subcommand) {
+        case "add":
+          await addProject({ db, projectPath, projectName, ollamaUrl: cli.values.ollama as string });
+          break;
+        case "status":
+          getStatus({ db, projectName });
+          break;
+        case "search":
+          searchCode({ 
+            db, 
+            projectName, 
+            query: cli.args.slice(1).join(" "), 
+            limit: cli.values.n ? parseInt(String(cli.values.n)) : 10,
+            semantic: !!cli.values.semantic
+          });
+          break;
+        case "embed":
+          await triggerEmbedding({ db, projectName, ollamaUrl: cli.values.ollama as string });
+          break;
+        case "remove":
+          removeProject({ db, projectName });
+          break;
+        default:
+          console.error(`Unknown code-index command: ${subcommand}`);
+          console.error("Usage: qmd code-index [add|status|search|embed|remove] [options]");
+          process.exit(1);
+      }
       closeDb();
       break;
     }
